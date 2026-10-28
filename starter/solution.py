@@ -54,6 +54,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 from games import GAME, GAMES, require, source_frames  # noqa: E402
+from load_smart_tagging import load as load_smart_tagging  # noqa: E402
 
 # Params
 RESULTS_DIR = os.path.join(ROOT, "evaluation", "results")
@@ -61,9 +62,14 @@ RESULTS_DIR = os.path.join(ROOT, "evaluation", "results")
 # The four published variants: (name, half-width of the majority-vote window, in frames).
 # 0 means no smoothing. 25 frames is one second at 25 fps, so these are +/- 1 s, 2 s and 5 s.
 VARIANTS = (
-    ("solution_1_smooth25", 25),
-    ("solution_1_smooth50", 50),
-    ("solution_1_smooth125", 125),
+    ("solution_smooth25", 0),
+    ("solution_smooth25", 25),
+    ("solution_smooth50", 50),
+    ("solution_smooth125", 125),
+    ("solution_smooth125", 150),
+    ("solution_smooth125", 200),
+    ("solution_smooth125", 500),
+    ("solution_smooth125", 1000),
 )
 
 # Raw ATD line: "<frame>:<player>;<player>;...:<ball>", each group "x,y,speed" with NaN for a
@@ -74,6 +80,23 @@ MISSING = "N"  # first character of "NaN", which is all we need to test for
 
 HOME, AWAY, NOBODY = 0, 1, -1
 LABELS = np.array(["H", "A", "D"])
+
+ATTACKING_PHASES = {
+    "BUILD UP",
+    "PLAYERS IN THE BOX",
+    "BALL IN FINAL THIRD",
+    "BALL IN THE BOX",
+    "LONG BALL",
+    "PROGRESSION",
+    "CREATING CHANCES",
+    "ATTACKING TRANSITION",
+}
+DEFENDING_PHASES = {
+    "DEFENDING IN MIDDLE THIRD",
+    "DEFENDING IN DEFENSIVE THIRD",
+    "DEFENSIVE TRANSITION",
+    "DEFENDING IN ATTACKING THIRD",
+}
 
 
 def team_of_each_track(meta_path):
@@ -147,6 +170,45 @@ def nearest_player_labels(raw_path, team_of_track, n_frames, pitch):
     return out
 
 
+def smart_tagging_labels(codes, events, home_name, away_name):
+    labels = np.full(len(codes), NOBODY, dtype=np.int8)
+    team_codes = {home_name: HOME, away_name: AWAY}
+    attacking = np.zeros(len(codes), dtype=bool)
+    defending = np.full(len(codes), NOBODY, dtype=np.int8)
+    set_pieces = np.zeros(len(codes), dtype=bool)
+
+    for event in events:
+        code = (event["code"] or "").strip().upper()
+        start = max(0, event["start_frame"])
+        end = min(len(codes), event["end_frame"])
+        if start >= end:
+            continue
+
+        if code in ATTACKING_PHASES:
+            attacking[start:end] = True
+        elif code in DEFENDING_PHASES:
+            team = team_codes.get((event["tags"].get("Team") or "").strip())
+            if team is not None:
+                defending[start:end] = 1 - team
+        elif code == "SET PIECES":
+            set_pieces[start:end] = True
+
+    last_seen = np.full(len(codes), NOBODY, dtype=np.int8)
+    last = NOBODY
+    for frame, code in enumerate(codes):
+        last_seen[frame] = last
+        if code != NOBODY:
+            last = code
+
+    missing = codes == NOBODY
+    alive = missing & ~set_pieces
+    labels[missing & set_pieces] = NOBODY
+    labels[alive & (defending != NOBODY)] = defending[alive & (defending != NOBODY)]
+    labels[alive & (defending == NOBODY) & attacking] = last_seen[
+        alive & (defending == NOBODY) & attacking]
+    return labels
+
+
 def smooth(codes, window):
     """Majority vote over a centred window of +/- `window` frames. D where nobody has the ball.
 
@@ -188,7 +250,8 @@ def write_submission(path, labels):
 
 def build(game=GAME, data_dir=None):
     """Per-frame team codes for the whole video. The expensive half, run once, smoothed many ways."""
-    meta_path, raw_path = require(["atd_meta", "atd_raw"], game, data_dir)
+    meta_path, raw_path, smart_tagging_path = require(
+        ["atd_meta", "atd_raw", "smart_tagging"], game, data_dir)
     n_frames = source_frames("tactical", game)
 
     home, away = team_names(meta_path)
@@ -197,6 +260,9 @@ def build(game=GAME, data_dir=None):
 
     codes = nearest_player_labels(raw_path, team_of_each_track(meta_path), n_frames,
                                   GAMES[game]["pitch"])
+    events = load_smart_tagging(game, data_dir)
+    tagged = smart_tagging_labels(codes, events, home, away)
+    codes[codes == NOBODY] = tagged[codes == NOBODY]
     seen = int(np.sum(codes != NOBODY))
     print("  ball located on {} of {} frames ({:.1f}%)\n".format(
         seen, n_frames, 100.0 * seen / n_frames))
