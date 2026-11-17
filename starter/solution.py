@@ -1,53 +1,9 @@
-"""The reference baseline: whoever is closest to the ball has it.
-
-This is the floor to beat, and it is deliberately the simplest thing that is not a constant guess.
-Two steps, no model, no training:
-
-  1. For every frame where the tracking sees the ball, find the nearest tracked player and give
-     that player's team the ball. Where the ball is not visible, say D.
-  2. Smooth the result with a centred majority vote, because step 1 alone flickers.
-
-    pip install -r requirements.txt          # numpy and pandas, nothing else
-    python starter/baseline.py               # writes four submissions and scores them
-
-numpy only, on purpose: it runs in the same environment as the scorer, so getting to a scored
-submission needs no kloppy, no video decoder and no plotting stack. Reading the raw ATD by hand
-also shows the file format more plainly than a loader would. Expect it to take a minute or two --
-it streams 199319 lines of tracking.
-
-Why step 2 is the whole point
------------------------------
-The four variants differ in one number, the smoothing window, and nothing else. Scored on the full
-match they look like this:
-
-    baseline_raw          macroF1 0.6532   spellF1 0.0486
-    baseline_smooth25     macroF1 0.6752   spellF1 0.1996
-    baseline_smooth50     macroF1 0.6724   spellF1 0.2433   <- the published floor
-    baseline_smooth125    macroF1 0.6356   spellF1 0.2242
-
-macroF1 moves by 0.04 across the whole sweep; spellF1 moves by a factor of five. That is the
-argument EVALUATION.md makes, happening to a real system rather than a synthetic one, and it is why
-the board is ranked on spellF1. Watch your own possession counts fall as the window widens -- the
-raw variant invents several times more possessions than a football match contains.
-
-There is a second lesson in these files, and it costs nothing to learn it here rather than on
-results day: on the public five minutes, baseline_smooth125 is the best of the four by a wide
-margin. On the full match it is worse than baseline_smooth50. Tuning the window against the public
-window picks the wrong one. Seventeen possessions cannot rank anything -- see EVALUATION.md.
-
-What this baseline does not do
-------------------------------
-It has no notion of a dead ball beyond "the tracking lost the ball", which is why its D class is
-weak. It ignores the Smart Tagging, the homography and both videos. It ignores possession
-structure entirely -- no notion that possessions have a beginning and an end. Every one of those
-is an opening.
-"""
+"""Generate possession-class submissions from tracking and smart-tagging data."""
 
 import argparse
 import os
 import sys
 import xml.etree.ElementTree as ET
-
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,27 +12,19 @@ sys.path.insert(0, ROOT)
 from games import GAME, GAMES, require, source_frames  # noqa: E402
 from load_smart_tagging import load as load_smart_tagging  # noqa: E402
 
-# Params
 RESULTS_DIR = os.path.join(ROOT, "evaluation", "results")
 
-# The four published variants: (name, half-width of the majority-vote window, in frames).
-# 0 means no smoothing. 25 frames is one second at 25 fps, so these are +/- 1 s, 2 s and 5 s.
 VARIANTS = (
-    ("solution_smooth25", 0),
+    ("solution_smooth", 0),
     ("solution_smooth25", 25),
     ("solution_smooth50", 50),
+    ("solution_smooth122", 122),
     ("solution_smooth125", 125),
-    ("solution_smooth125", 150),
-    ("solution_smooth125", 200),
-    ("solution_smooth125", 500),
-    ("solution_smooth125", 1000),
 )
 
-# Raw ATD line: "<frame>:<player>;<player>;...:<ball>", each group "x,y,speed" with NaN for a
-# missing observation. Splitting on ':' gives exactly three parts.
 FIELD_SEP = ":"
 GROUP_SEP = ";"
-MISSING = "N"  # first character of "NaN", which is all we need to test for
+MISSING = "N" 
 
 HOME, AWAY, NOBODY = 0, 1, -1
 LABELS = np.array(["H", "A", "D"])
@@ -91,13 +39,13 @@ ATTACKING_PHASES = {
     "CREATING CHANCES",
     "ATTACKING TRANSITION",
 }
+
 DEFENDING_PHASES = {
     "DEFENDING IN MIDDLE THIRD",
     "DEFENDING IN DEFENSIVE THIRD",
     "DEFENSIVE TRANSITION",
     "DEFENDING IN ATTACKING THIRD",
 }
-
 
 def team_of_each_track(meta_path):
     """Array over track slots: 0 if the slot belongs to the home team, 1 if away.
