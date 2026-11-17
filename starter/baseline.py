@@ -58,12 +58,34 @@ from games import GAME, GAMES, require, source_frames  # noqa: E402
 # Params
 RESULTS_DIR = os.path.join(ROOT, "evaluation", "results")
 
-# The four published variants: (name, half-width of the majority-vote window, in frames).
-# 0 means no smoothing. 25 frames is one second at 25 fps, so these are +/- 1 s, 2 s and 5 s.
+# Variants: (name, half-width of the majority-vote window, in frames).
+# 0 means no smoothing; subsequent variants increase in 5-frame increments.
 VARIANTS = (
     ("baseline_raw", 0),
+    ("baseline_smooth5", 5),
+    ("baseline_smooth10", 10),
+    ("baseline_smooth15", 15),
+    ("baseline_smooth20", 20),
     ("baseline_smooth25", 25),
+    ("baseline_smooth30", 30),
+    ("baseline_smooth35", 35),
+    ("baseline_smooth40", 40),
+    ("baseline_smooth45", 45),
     ("baseline_smooth50", 50),
+    ("baseline_smooth55", 55),
+    ("baseline_smooth60", 60),
+    ("baseline_smooth65", 65),
+    ("baseline_smooth70", 70),
+    ("baseline_smooth75", 75),
+    ("baseline_smooth80", 80),
+    ("baseline_smooth85", 85),
+    ("baseline_smooth90", 90),
+    ("baseline_smooth95", 95),
+    ("baseline_smooth100", 100),
+    ("baseline_smooth105", 105),
+    ("baseline_smooth110", 110),
+    ("baseline_smooth115", 115),
+    ("baseline_smooth120", 120),
     ("baseline_smooth125", 125),
 )
 

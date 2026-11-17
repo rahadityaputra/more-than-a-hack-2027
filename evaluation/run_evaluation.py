@@ -163,24 +163,31 @@ def score_submission(path, gt_codes, taus, bootstrap_n):
 
 
 def rank_key(entry, loose_tau):
-    """RANK_METRIC desc, then macro-F1, then transition F1, then latency asc, name asc.
+    """The CSV/primary ranking key, using the configured RANK_METRIC."""
+    return ranking_key(entry, loose_tau, RANK_METRIC)
 
-    macro-F1 is the first tie-break rather than the name because two submissions can tie exactly
-    on the ranking metric: team_swapped and always_home both score 0.0000 on spell_f1_mean, and
-    macro-F1 separates them meaningfully (0.3333 against 0.1627) where alphabetical order would
-    be arbitrary.
-    """
+
+def ranking_key(entry, loose_tau, metric):
+    """Metric desc, then headline metrics, transition F1, latency, and name."""
+
     result = entry["result"]
+    if metric == "average":
+        value = (result["macro_f1"] + result["spell_f1_mean"]) / 2
+        tie_breakers = (-result["macro_f1"], -result["spell_f1_mean"])
+    else:
+        other_metric = "spell_f1_mean" if metric == "macro_f1" else "macro_f1"
+        value = result[metric]
+        tie_breakers = (-result[other_metric],)
     latency = result["transitions"][loose_tau]["mean_abs_latency"]
-    return (-result[RANK_METRIC],
-            -result["macro_f1"],
+    return (-value,
+            *tie_breakers,
             -result["transitions"][loose_tau]["f1"],
             latency if latency is not None else float("inf"),
             entry["name"])
 
 
 def print_scoreboard(entries, skipped, gt_path, meta, loose_tau):
-    """The ranked table. 93 columns wide, so it survives a 100-column terminal.
+    """Print both headline rankings and the supporting scoreboard information.
 
     macroF1 and spellF1 sit next to each other on purpose: they are the two headline numbers and
     answer different questions -- "right label at this frame" versus "right possessions" -- so
@@ -223,32 +230,42 @@ def print_scoreboard(entries, skipped, gt_path, meta, loose_tau):
     print("spellF1 = mean possession-spell F1 over IoU {}; transF1/lat_f at +/-{} frames".format(
         "/".join("{:.1f}".format(i) for i in pm.SPELL_IOUS), loose_tau))
 
-    header = ("{:>4}  {:<{w}}  {:>7}  {:>7}  {:>5}  {:>6}  {:>7}  {:>5}  {:>6}  {:>4}".format(
-        "rank", "submission", "macroF1", "spellF1", "poss", "dur", "transF1", "lat_f",
-        "shareE", "frag", w=NAME_WIDTH))
-    print("\n" + header)
-    print("{}  {}  {}  {}  {}  {}  {}  {}  {}  {}".format(
-        "-" * 4, "-" * NAME_WIDTH, "-" * 7, "-" * 7, "-" * 5, "-" * 6, "-" * 7, "-" * 5,
-        "-" * 6, "-" * 4))
+    print_ranking_table(entries, skipped, loose_tau, "macro_f1", "macroF1 ranking")
+    print_ranking_table(entries, skipped, loose_tau, "spell_f1_mean", "spellF1 ranking")
+    print_ranking_table(entries, skipped, loose_tau, "average", "average ranking")
 
-    for rank, entry in enumerate(entries, start=1):
+    print_headline_agreement(entries)
+
+
+def print_ranking_table(entries, skipped, loose_tau, metric, title):
+    """Print one ranking table, ordered by the requested headline metric."""
+    ranked = sorted(entries, key=lambda entry: ranking_key(entry, loose_tau, metric))
+    print("\n{}".format(title))
+    header = ("{:>4}  {:<{w}}  {:>7}  {:>7}  {:>7}  {:>5}  {:>6}  {:>7}  {:>5}  {:>6}  {:>4}".format(
+        "rank", "submission", "macroF1", "spellF1", "average", "poss", "dur", "transF1",
+        "lat_f", "shareE", "frag", w=NAME_WIDTH))
+    print(header)
+    print("{}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}".format(
+        "-" * 4, "-" * NAME_WIDTH, "-" * 7, "-" * 7, "-" * 7, "-" * 5, "-" * 6, "-" * 7,
+        "-" * 5, "-" * 6, "-" * 4))
+
+    for rank, entry in enumerate(ranked, start=1):
         result = entry["result"]
         transition = result["transitions"][loose_tau]
-        print("{:>4}  {:<{w}}  {:>7.4f}  {:>7.4f}  {:>5}  {:>6.1f}  {:>7.4f}  {:>5}  {:>6}  "
-              "{:>4}".format(
+        print("{:>4}  {:<{w}}  {:>7.4f}  {:>7.4f}  {:>7.4f}  {:>5}  {:>6.1f}  {:>7.4f}  "
+              "{:>5}  {:>6}  {:>4}".format(
                   rank, truncate(entry["name"]), result["macro_f1"], result["spell_f1_mean"],
+                  (result["macro_f1"] + result["spell_f1_mean"]) / 2,
                   result["n_pred_spells"], result["mean_spell_duration_s"], transition["f1"],
                   signed(transition["mean_latency"]),
                   "{:.3f}".format(result["share_err"]) if result["share_defined"] else "  --",
                   "{:.2f}".format(result["fragmentation"]), w=NAME_WIDTH))
 
     for entry in skipped:
-        print("{:>4}  {:<{w}}  {:>7}  {:>7}  {:>5}  {:>6}  {:>7}  {:>5}  {:>6}  {:>4}".format(
-            "-", truncate(entry["name"]), "--", "--", "--", "--", "--", "--", "--", "--",
+        print("{:>4}  {:<{w}}  {:>7}  {:>7}  {:>7}  {:>5}  {:>6}  {:>7}  {:>5}  {:>6}  {:>4}".format(
+            "-", truncate(entry["name"]), "--", "--", "--", "--", "--", "--", "--", "--", "--",
             w=NAME_WIDTH))
         print("        SKIPPED: {}".format(entry["reason"]))
-
-    print_headline_agreement(entries)
 
 
 def print_headline_agreement(entries):
